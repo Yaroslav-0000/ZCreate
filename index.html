@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>ZCreate Registry World - Mobile</title>
+  <title>ZCreate Registry World - Mobile Fixed</title>
   <style>
     body { 
       margin: 0; 
@@ -36,6 +36,7 @@
       border: 2px solid rgba(255,255,255,0.3);
       z-index: 20;
       touch-action: none;
+      pointer-events: auto;
     }
     #joystick-handle {
       position: absolute;
@@ -47,6 +48,7 @@
       left: 35px;
       touch-action: none;
       box-shadow: 0 0 10px rgba(0,0,0,0.3);
+      pointer-events: none;
     }
     #flight-buttons {
       position: absolute;
@@ -56,6 +58,7 @@
       flex-direction: column;
       gap: 15px;
       z-index: 20;
+      pointer-events: auto;
     }
     .flight-btn {
       width: 70px;
@@ -73,15 +76,20 @@
       user-select: none;
       touch-action: manipulation;
       box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      pointer-events: auto;
     }
     .flight-btn:active {
       background: rgba(100,100,255,0.8);
       transform: scale(0.95);
     }
+    canvas {
+      touch-action: none;
+      display: block;
+    }
   </style>
 </head>
 <body>
-  <div id="controls-info">👆 Нажмите на экран для управления взглядом | Джойстик для движения</div>
+  <div id="controls-info">👆 Левой рукой джойстик | Правой рукой кнопки | Правой рукой поворот экрана</div>
   
   <div id="joystick-area">
     <div id="joystick-handle"></div>
@@ -116,7 +124,11 @@
       moveForward: 0,
       moveRight: 0,
       flyUp: false,
-      flyDown: false
+      flyDown: false,
+      
+      // Отслеживание касаний
+      joystickTouchId: null,
+      cameraTouchId: null
     };
 
     // --- Обработка клавиш (для ПК) ---
@@ -149,19 +161,29 @@
     // --- Мобильное управление: джойстик ---
     const joystickArea = document.getElementById('joystick-area');
     const joystickHandle = document.getElementById('joystick-handle');
-    let joystickActive = false;
     const joystickMaxDist = 40;
 
     function handleJoystickStart(e) {
       e.preventDefault();
+      const touch = e.touches[0];
+      controlState.joystickTouchId = touch.identifier;
       joystickActive = true;
     }
 
     function handleJoystickMove(e) {
-      if (!joystickActive) return;
       e.preventDefault();
       
-      const touch = e.touches[0];
+      // Находим нужное касание
+      let touch = null;
+      for (let i = 0; i < e.touches.length; i++) {
+        if (e.touches[i].identifier === controlState.joystickTouchId) {
+          touch = e.touches[i];
+          break;
+        }
+      }
+      
+      if (!touch) return;
+      
       const rect = joystickArea.getBoundingClientRect();
       const centerX = rect.left + rect.width/2;
       const centerY = rect.top + rect.height/2;
@@ -184,19 +206,30 @@
       controlState.moveY = deltaY / joystickMaxDist;
       
       // Преобразуем в направления: вперед/назад (Y), вправо/влево (X)
-      // Инвертируем Y, т.к. вниз по экрану = назад
       controlState.moveForward = -controlState.moveY;
       controlState.moveRight = controlState.moveX;
     }
 
     function handleJoystickEnd(e) {
       e.preventDefault();
-      joystickActive = false;
-      joystickHandle.style.transform = 'translate(0px, 0px)';
-      controlState.moveX = 0;
-      controlState.moveY = 0;
-      controlState.moveForward = 0;
-      controlState.moveRight = 0;
+      
+      // Проверяем, не осталось ли касаний с этим id
+      let touchStillExists = false;
+      for (let i = 0; i < e.touches.length; i++) {
+        if (e.touches[i].identifier === controlState.joystickTouchId) {
+          touchStillExists = true;
+          break;
+        }
+      }
+      
+      if (!touchStillExists) {
+        controlState.joystickTouchId = null;
+        joystickHandle.style.transform = 'translate(0px, 0px)';
+        controlState.moveX = 0;
+        controlState.moveY = 0;
+        controlState.moveForward = 0;
+        controlState.moveRight = 0;
+      }
     }
 
     joystickArea.addEventListener('touchstart', handleJoystickStart, { passive: false });
@@ -207,69 +240,115 @@
     // --- Мобильное управление: кнопки полета ---
     document.getElementById('btn-up').addEventListener('touchstart', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       controlState.flyUp = true;
     });
     document.getElementById('btn-up').addEventListener('touchend', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       controlState.flyUp = false;
     });
     document.getElementById('btn-up').addEventListener('touchcancel', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       controlState.flyUp = false;
     });
 
     document.getElementById('btn-down').addEventListener('touchstart', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       controlState.flyDown = true;
     });
     document.getElementById('btn-down').addEventListener('touchend', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       controlState.flyDown = false;
     });
     document.getElementById('btn-down').addEventListener('touchcancel', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       controlState.flyDown = false;
     });
 
-    // --- Управление взглядом через касание экрана ---
+    // --- Управление взглядом через касание экрана (НЕ перекрывая джойстик) ---
     let pitch = 0;
     let yaw = 0;
     const touchSensitivity = 0.005;
     let lastTouchX = null;
     let lastTouchY = null;
 
+    // Обрабатываем касания на canvas для поворота камеры
     renderer.domElement.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      if (e.touches.length === 1) {
-        lastTouchX = e.touches[0].clientX;
-        lastTouchY = e.touches[0].clientY;
+      // Не обрабатываем, если касание началось на джойстике или кнопках
+      const touch = e.touches[0];
+      const element = document.elementFromPoint(touch.clientX, touch.clientY);
+      
+      if (element === joystickArea || element.closest('#flight-buttons')) {
+        return;
       }
-    });
-
-    renderer.domElement.addEventListener('touchmove', (e) => {
+      
       e.preventDefault();
-      if (e.touches.length === 1 && lastTouchX !== null && lastTouchY !== null) {
-        const touch = e.touches[0];
-        const deltaX = touch.clientX - lastTouchX;
-        const deltaY = touch.clientY - lastTouchY;
-        
-        yaw -= deltaX * touchSensitivity;
-        pitch -= deltaY * touchSensitivity;
-        
-        pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
-        
-        camera.rotation.order = 'YXZ';
-        camera.rotation.set(pitch, yaw, 0);
-        
+      
+      if (e.touches.length === 1) {
+        controlState.cameraTouchId = touch.identifier;
         lastTouchX = touch.clientX;
         lastTouchY = touch.clientY;
       }
     });
 
-    renderer.domElement.addEventListener('touchend', (e) => {
+    renderer.domElement.addEventListener('touchmove', (e) => {
+      // Находим касание для камеры
+      let touch = null;
+      for (let i = 0; i < e.touches.length; i++) {
+        if (e.touches[i].identifier === controlState.cameraTouchId) {
+          touch = e.touches[i];
+          break;
+        }
+      }
+      
+      if (!touch || lastTouchX === null || lastTouchY === null) return;
+      
       e.preventDefault();
+      
+      const deltaX = touch.clientX - lastTouchX;
+      const deltaY = touch.clientY - lastTouchY;
+      
+      yaw -= deltaX * touchSensitivity;
+      pitch -= deltaY * touchSensitivity;
+      
+      pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+      
+      camera.rotation.order = 'YXZ';
+      camera.rotation.set(pitch, yaw, 0);
+      
+      lastTouchX = touch.clientX;
+      lastTouchY = touch.clientY;
+    });
+
+    renderer.domElement.addEventListener('touchend', (e) => {
+      // Проверяем, не закончилось ли касание камеры
+      let touchStillExists = false;
+      for (let i = 0; i < e.touches.length; i++) {
+        if (e.touches[i].identifier === controlState.cameraTouchId) {
+          touchStillExists = true;
+          break;
+        }
+      }
+      
+      if (!touchStillExists) {
+        controlState.cameraTouchId = null;
+        lastTouchX = null;
+        lastTouchY = null;
+      }
+      
+      e.preventDefault();
+    });
+
+    renderer.domElement.addEventListener('touchcancel', (e) => {
+      controlState.cameraTouchId = null;
       lastTouchX = null;
       lastTouchY = null;
+      e.preventDefault();
     });
 
     // --- Блокировка указателя для ПК ---
@@ -349,13 +428,11 @@
         for (let side of ["top", "bottom", "left", "right", "front", "back"]) {
           if (options.textures[side]) {
             try {
-              // Пытаемся загрузить текстуру
               let tex = loader.load(`textures/${options.textures[side]}`);
               tex.magFilter = THREE.NearestFilter;
               tex.minFilter = THREE.NearestFilter;
               tex.generateMipmaps = false;
               faces[side] = tex;
-              console.log(`Загружена текстура для ${side}: ${options.textures[side]}`);
             } catch (e) {
               console.warn(`Не удалось загрузить текстуру ${options.textures[side]}`);
               faces[side] = null;
@@ -434,13 +511,6 @@
           new THREE.MeshBasicMaterial({ map: reg.textures.back || null })   // back
         ];
 
-        // Если текстуры не загрузились, используем серый цвет
-        materials.forEach(mat => {
-          if (!mat.map) {
-            mat.color.setHex(0xcccccc);
-          }
-        });
-
         return new THREE.Mesh(new THREE.BoxGeometry(1,1,1), materials);
       }
     }
@@ -487,7 +557,7 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    console.log("Мир загружен с текстурами:", RegistryData.Block);
+    console.log("Мир загружен, можно использовать обе руки одновременно!");
   </script>
 </body>
 </html>
